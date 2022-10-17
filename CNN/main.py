@@ -1,8 +1,12 @@
 from genericpath import exists
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from matplotlib import pyplot as plt
+from sklearn.manifold import TSNE
+from torch.optim import lr_scheduler
 
 import data
 import models
@@ -28,6 +32,7 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, save_di
             _, predictions = torch.max(outputs, 1)
             loss.backward()
             optimizer.step()
+
 
             total_loss += loss.item() * inputs.size(0)
             total_correct += torch.sum(predictions == labels.data)
@@ -69,9 +74,12 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, save_di
         valid_loss, valid_acc = valid(model, valid_loader, criterion)
         print("validation: {:.4f}, {:.4f}".format(valid_loss, valid_acc))
 
+        print("第%d轮的学习率：%f" % (epoch, optimizer.param_groups[0]['lr']))
+        scheduler.step()
+
         epoch_train_loss.append(train_loss)
         epoch_train_accuracy.append(train_acc)
-        epoch_valid_loss.append(epoch_valid_loss)
+        epoch_valid_loss.append(valid_loss)
         epoch_valid_accuracy.append(valid_acc)
 
         if valid_acc > best_acc:
@@ -109,7 +117,39 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, save_di
 
     plt.savefig("../result.png")
 
+    print("最高精确度:", best_acc)
 
+
+
+def draw_TSNE(valid_loader, device):
+    model = torch.load("./checkpoints/best_model.pt", map_location=torch.device('cpu'))
+    new_model = nn.Sequential(*list(model.children())[:9])
+    new_model.to(device)
+    new_model.eval()
+    i = 0
+    for inputs, labels in valid_loader:
+        i = i + 1
+        inputs = inputs.to(device)
+        labels = labels.to(device)
+        outputs = new_model(inputs)
+        # iris数据集中有4个指标，原始数据为4维
+        # 使用 TSNE 降到2维
+        outputs = outputs.cpu()
+        outputs = outputs.detach().numpy()
+        labels = labels.cpu().detach().numpy()
+        outputs = (outputs.reshape(outputs.shape[0], outputs.shape[1] * outputs.shape[2] * outputs.shape[3]))
+        if i == 1:
+            sample = outputs
+            target = labels
+            continue
+        sample = np.vstack((sample, outputs))
+        target = np.vstack((target, labels))
+
+    x_tsne = TSNE(n_components=2, random_state=33).fit_transform(sample)
+    plt.figure().set_size_inches(10, 6)
+    # 按照不同类别不同颜色显示降维之后的数据散点图
+    plt.scatter(x_tsne[:, 0], x_tsne[:, 1], c=target)
+    plt.show()
 
 
 if __name__ == '__main__':
@@ -142,7 +182,8 @@ if __name__ == '__main__':
 
     ## optimizer
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9)
-
+    scheduler = lr_scheduler.StepLR(optimizer, 10, gamma=0.8, last_epoch=-1)
     ## loss function
     criterion = nn.CrossEntropyLoss()
     train_model(model, train_loader, valid_loader, criterion, optimizer, args.save_dir, num_epochs=num_epochs)
+    # draw_TSNE(valid_loader, device)
